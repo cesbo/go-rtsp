@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSdp_ParseSDP(t *testing.T) {
-	assert := assert.New(t)
+	require := require.New(t)
 
 	data := []byte(strings.Join(
 		[]string{
@@ -25,21 +25,19 @@ func TestSdp_ParseSDP(t *testing.T) {
 		},
 		"\r\n",
 	))
-	u, _ := url.Parse("rtsp://test.com")
+	u, _ := url.Parse("rtsp://test.local")
 	s, err := ParseSDP(u, data)
-	if !assert.NoError(err) {
-		return
-	}
+	require.NoError(err)
 
-	c1, _ := url.Parse("trackID=0")
-	c2, _ := url.Parse("trackID=1")
+	c1, _ := url.Parse("rtsp://test.local/trackID=0")
+	c2, _ := url.Parse("rtsp://test.local/trackID=1")
 
 	expectedSdp := []*SdpItem{
 		{
 			Port:      5004,
 			Transport: "RTP/AVP",
 			Format:    96,
-			URL:       u.ResolveReference(c1),
+			URL:       c1,
 
 			Media: &MediaMPEG4{
 				ClockRate:      8000,
@@ -52,7 +50,7 @@ func TestSdp_ParseSDP(t *testing.T) {
 			Port:      5006,
 			Transport: "RTP/AVP",
 			Format:    97,
-			URL:       u.ResolveReference(c2),
+			URL:       c2,
 
 			Media: &MediaH264{
 				ClockRate:      90000,
@@ -67,17 +65,17 @@ func TestSdp_ParseSDP(t *testing.T) {
 		},
 	}
 
-	assert.Equal(expectedSdp, s)
+	require.Equal(expectedSdp, s)
 }
 
 func TestSdp_parse_a_control(t *testing.T) {
-	t.Run("globa control", func(t *testing.T) {
-		assert := assert.New(t)
+	t.Run("absolute control", func(t *testing.T) {
+		require := require.New(t)
 
 		data := []byte(strings.Join(
 			[]string{
 				"v=0",
-				"a=control:rtsp://example.com/movie/",
+				"a=control:rtsp://test.local/setup/",
 				"m=video 8002 RTP/AVP 31",
 				"a=control:trackID=1",
 				"m=audio 8004 RTP/AVP 3",
@@ -85,13 +83,11 @@ func TestSdp_parse_a_control(t *testing.T) {
 			},
 			"\r\n",
 		))
-		u, _ := url.Parse("rtsp://test.com")
+		u, _ := url.Parse("rtsp://test.local/example/")
 		s, err := ParseSDP(u, data)
-		if !assert.NoError(err) {
-			return
-		}
+		require.NoError(err)
 
-		control, _ := url.Parse("rtsp://example.com/movie/")
+		control, _ := url.Parse("rtsp://test.local/setup/")
 		c1, _ := url.Parse("trackID=1")
 		c2, _ := url.Parse("trackID=2")
 
@@ -110,24 +106,24 @@ func TestSdp_parse_a_control(t *testing.T) {
 			},
 		}
 
-		assert.Equal(expectedSdp, s)
+		require.Equal(expectedSdp, s)
 	})
 
 	t.Run("asterisk control", func(t *testing.T) {
-		assert := assert.New(t)
+		require := require.New(t)
 
 		data := []byte(strings.Join(
 			[]string{
 				"v=0",
-				"a=control:rtsp://example.com/movie/",
+				"a=control:rtsp://test.local/movie/",
 				"m=video 8002 RTP/AVP 31",
 				"a=control:*",
 			},
 			"\r\n",
 		))
-		u, _ := url.Parse("rtsp://example.com/movie/")
+		u, _ := url.Parse("rtsp://test.local/movie/")
 		s, err := ParseSDP(u, data)
-		assert.Equal(nil, err)
+		require.Equal(nil, err)
 
 		expectedSdp := []*SdpItem{
 			{
@@ -138,40 +134,41 @@ func TestSdp_parse_a_control(t *testing.T) {
 			},
 		}
 
-		assert.Equal(expectedSdp, s)
+		require.Equal(expectedSdp, s)
 	})
 
-	t.Run("default control", func(t *testing.T) {
-		assert := assert.New(t)
+	t.Run("relative control", func(t *testing.T) {
+		require := require.New(t)
 
 		data := []byte(strings.Join(
 			[]string{
 				"v=0",
 				"m=video 8002 RTP/AVP 31",
-				"a=control:*",
+				"a=control:trackID=1",
 			},
 			"\r\n",
 		))
-		u, _ := url.Parse("rtsp://example.com/movie/")
+		u, _ := url.Parse("rtsp://test.local/user=&password=&channel=1&stream=0.sdp")
 		s, err := ParseSDP(u, data)
-		assert.Equal(nil, err)
+		require.Equal(nil, err)
+
+		c1, _ := url.Parse("rtsp://test.local/user=&password=&channel=1&stream=0.sdp/trackID=1")
 
 		expectedSdp := []*SdpItem{
 			{
 				Port:      8002,
 				Transport: "RTP/AVP",
 				Format:    31,
-				URL:       u,
+				URL:       c1,
 			},
 		}
 
-		assert.Equal(expectedSdp, s)
+		require.Equal(expectedSdp, s)
 	})
 }
 
-// space in rtpmap line
-func TestSdp_rtpmap_bug_1(t *testing.T) {
-	assert := assert.New(t)
+func TestSdp_space_in_rtpmap_line(t *testing.T) {
+	require := require.New(t)
 
 	data := []byte(strings.Join(
 		[]string{
@@ -183,13 +180,11 @@ func TestSdp_rtpmap_bug_1(t *testing.T) {
 		},
 		"\r\n",
 	))
-	u, _ := url.Parse("rtsp://test.com")
+	u, _ := url.Parse("rtsp://test.local")
 	s, err := ParseSDP(u, data)
-	if !assert.NoError(err) {
-		return
-	}
+	require.NoError(err)
 
-	assert.Len(s, 1)
+	require.Len(s, 1)
 	_, ok := s[0].Media.(*MediaH264)
-	assert.True(ok)
+	require.True(ok)
 }

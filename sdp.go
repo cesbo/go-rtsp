@@ -115,9 +115,20 @@ func ParseSDP(control *url.URL, data []byte) ([]*SdpItem, error) {
 			switch attr {
 			case "control":
 				u := control
-				if value != "*" {
+				if value == "*" {
+					// do nothing keep base URL
+				} else if strings.HasPrefix(value, "rtsp://") {
 					if parsed, err := url.Parse(value); err == nil {
-						u = u.ResolveReference(parsed)
+						u = parsed
+					}
+				} else {
+					base := control.String()
+					if !strings.HasSuffix(base, "/") {
+						base += "/"
+					}
+					base += value
+					if parsed, err := url.Parse(base); err == nil {
+						u = parsed
 					}
 				}
 
