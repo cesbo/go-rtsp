@@ -168,3 +168,28 @@ func TestSdp_parse_a_control(t *testing.T) {
 		assert.Equal(expectedSdp, s)
 	})
 }
+
+// space in rtpmap line
+func TestSdp_rtpmap_bug_1(t *testing.T) {
+	assert := assert.New(t)
+
+	data := []byte(strings.Join(
+		[]string{
+			`v=0`,
+			`m=video 5006 RTP/AVP 97`,
+			`a=rtpmap:97 H264/90000 `,
+			`a=fmtp:97 profile-level-id=428014;sprop-parameter-sets=Z0KAFNoFB+Q=,aM4G4g==;`,
+			`a=control:trackID=1`,
+		},
+		"\r\n",
+	))
+	u, _ := url.Parse("rtsp://test.com")
+	s, err := ParseSDP(u, data)
+	if !assert.NoError(err) {
+		return
+	}
+
+	assert.Len(s, 1)
+	_, ok := s[0].Media.(*MediaH264)
+	assert.True(ok)
+}

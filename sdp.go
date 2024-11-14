@@ -56,6 +56,8 @@ func (m *SdpItem) parse_a_rtpmap(line string) {
 		return
 	}
 
+	rtpmap = strings.TrimSpace(rtpmap)
+
 	params := strings.Split(rtpmap, "/")
 	if len(rtpmap) < 2 {
 		return
