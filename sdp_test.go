@@ -69,7 +69,7 @@ func TestSdp_ParseSDP(t *testing.T) {
 }
 
 func TestSdp_parse_a_control(t *testing.T) {
-	t.Run("absolute control", func(t *testing.T) {
+	t.Run("redefine base url", func(t *testing.T) {
 		require := require.New(t)
 
 		data := []byte(strings.Join(
@@ -78,8 +78,6 @@ func TestSdp_parse_a_control(t *testing.T) {
 				"a=control:rtsp://test.local/setup/",
 				"m=video 8002 RTP/AVP 31",
 				"a=control:trackID=1",
-				"m=audio 8004 RTP/AVP 3",
-				"a=control:trackID=2",
 			},
 			"\r\n",
 		))
@@ -87,22 +85,14 @@ func TestSdp_parse_a_control(t *testing.T) {
 		s, err := ParseSDP(u, data)
 		require.NoError(err)
 
-		control, _ := url.Parse("rtsp://test.local/setup/")
-		c1, _ := url.Parse("trackID=1")
-		c2, _ := url.Parse("trackID=2")
+		c1, _ := url.Parse("rtsp://test.local/setup/trackID=1")
 
 		expectedSdp := []*SdpItem{
 			{
 				Port:      8002,
 				Transport: "RTP/AVP",
 				Format:    31,
-				URL:       control.ResolveReference(c1),
-			},
-			{
-				Port:      8004,
-				Transport: "RTP/AVP",
-				Format:    3,
-				URL:       control.ResolveReference(c2),
+				URL:       c1,
 			},
 		}
 
@@ -123,7 +113,7 @@ func TestSdp_parse_a_control(t *testing.T) {
 		))
 		u, _ := url.Parse("rtsp://test.local/movie/")
 		s, err := ParseSDP(u, data)
-		require.Equal(nil, err)
+		require.NoError(err)
 
 		expectedSdp := []*SdpItem{
 			{
@@ -131,6 +121,35 @@ func TestSdp_parse_a_control(t *testing.T) {
 				Transport: "RTP/AVP",
 				Format:    31,
 				URL:       u,
+			},
+		}
+
+		require.Equal(expectedSdp, s)
+	})
+
+	t.Run("absolute control", func(t *testing.T) {
+		require := require.New(t)
+
+		data := []byte(strings.Join(
+			[]string{
+				"v=0",
+				"m=video 8002 RTP/AVP 31",
+				"a=control:rtsp://test.local/trackID=1",
+			},
+			"\r\n",
+		))
+		u, _ := url.Parse("rtsp://test.local/example")
+		s, err := ParseSDP(u, data)
+		require.NoError(err)
+
+		c1, _ := url.Parse("rtsp://test.local/trackID=1")
+
+		expectedSdp := []*SdpItem{
+			{
+				Port:      8002,
+				Transport: "RTP/AVP",
+				Format:    31,
+				URL:       c1,
 			},
 		}
 
@@ -150,7 +169,7 @@ func TestSdp_parse_a_control(t *testing.T) {
 		))
 		u, _ := url.Parse("rtsp://test.local/user=&password=&channel=1&stream=0.sdp")
 		s, err := ParseSDP(u, data)
-		require.Equal(nil, err)
+		require.NoError(err)
 
 		c1, _ := url.Parse("rtsp://test.local/user=&password=&channel=1&stream=0.sdp/trackID=1")
 
@@ -167,24 +186,26 @@ func TestSdp_parse_a_control(t *testing.T) {
 	})
 }
 
-func TestSdp_space_in_rtpmap_line(t *testing.T) {
-	require := require.New(t)
+func TestSdp_parse_a_rtpmap(t *testing.T) {
+	t.Run("trailing space bug", func(t *testing.T) {
+		require := require.New(t)
 
-	data := []byte(strings.Join(
-		[]string{
-			`v=0`,
-			`m=video 5006 RTP/AVP 97`,
-			`a=rtpmap:97 H264/90000 `,
-			`a=fmtp:97 profile-level-id=428014;sprop-parameter-sets=Z0KAFNoFB+Q=,aM4G4g==;`,
-			`a=control:trackID=1`,
-		},
-		"\r\n",
-	))
-	u, _ := url.Parse("rtsp://test.local")
-	s, err := ParseSDP(u, data)
-	require.NoError(err)
+		data := []byte(strings.Join(
+			[]string{
+				`v=0`,
+				`m=video 5006 RTP/AVP 97`,
+				`a=rtpmap:97 H264/90000 `,
+				`a=fmtp:97 profile-level-id=428014;sprop-parameter-sets=Z0KAFNoFB+Q=,aM4G4g==;`,
+				`a=control:trackID=1`,
+			},
+			"\r\n",
+		))
+		u, _ := url.Parse("rtsp://test.local")
+		s, err := ParseSDP(u, data)
+		require.NoError(err)
 
-	require.Len(s, 1)
-	_, ok := s[0].Media.(*MediaH264)
-	require.True(ok)
+		require.Len(s, 1)
+		_, ok := s[0].Media.(*MediaH264)
+		require.True(ok)
+	})
 }

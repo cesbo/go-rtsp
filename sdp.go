@@ -22,44 +22,44 @@ type SdpItem struct {
 const SdpMimeType = "application/sdp"
 
 func parse_m(line string) *SdpItem {
-	// m=video 5006 RTP/AVP 97
-	// - media: video
-	// - port: 5006
-	// - transport: RTP/AVP
-	// - format: 97
-	params := strings.Split(line, " ")
+	// m=<media> <port> <transport> <payload types>
+	// - media: video or audio
+	// - port: RTP port
+	// - transport: transport protocol RTP/AVP or UDP
+	// - payload types: 97
 
-	if len(params) != 4 {
+	fields := strings.Fields(line)
+	if len(fields) < 4 {
 		return nil
 	}
 
-	port, err := strconv.Atoi(params[1])
+	port, err := strconv.Atoi(fields[1])
 	if err != nil {
 		return nil
 	}
 
-	format, err := strconv.Atoi(params[3])
+	format, err := strconv.Atoi(fields[3])
 	if err != nil {
 		return nil
 	}
 
 	return &SdpItem{
 		Port:      port,
-		Transport: params[2],
+		Transport: fields[2],
 		Format:    format,
 	}
 }
 
 func (m *SdpItem) parse_a_rtpmap(line string) {
-	_, rtpmap, ok := strings.Cut(line, " ")
-	if !ok {
+	// a=rtpmap:<payload type> <encoding name>/<clock rate>[/<channels>]
+
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
 		return
 	}
 
-	rtpmap = strings.TrimSpace(rtpmap)
-
-	params := strings.Split(rtpmap, "/")
-	if len(rtpmap) < 2 {
+	params := strings.Split(fields[1], "/")
+	if len(params) < 2 {
 		return
 	}
 
@@ -79,6 +79,27 @@ func (m *SdpItem) parse_a_fmtp(line string) {
 	if _, fmtp, ok := strings.Cut(line, " "); ok {
 		m.Media.ParseFMTP(fmtp)
 	}
+}
+
+func parse_a_control(control *url.URL, line string) (*url.URL, error) {
+	line = strings.TrimSpace(line)
+
+	// do nothing keep base URL
+	if line == "*" {
+		return control, nil
+	}
+
+	if strings.HasPrefix(line, "rtsp://") {
+		return url.Parse(line)
+	}
+
+	path := control.Path
+	if !strings.HasSuffix(path, "/") && !strings.HasPrefix(line, "/") {
+		path += "/"
+	}
+	path += line
+
+	return control.Parse(path)
 }
 
 // ParseSDP parses SDP from the bytes array.
@@ -114,28 +135,13 @@ func ParseSDP(control *url.URL, data []byte) ([]*SdpItem, error) {
 
 			switch attr {
 			case "control":
-				u := control
-				if value == "*" {
-					// do nothing keep base URL
-				} else if strings.HasPrefix(value, "rtsp://") {
-					if parsed, err := url.Parse(value); err == nil {
-						u = parsed
+				if parsed, err := parse_a_control(control, value); err == nil {
+					if item != nil {
+						item.URL = parsed
+					} else {
+						// redefine base URL if a=control before m=
+						control = parsed
 					}
-				} else {
-					base := control.String()
-					if !strings.HasSuffix(base, "/") {
-						base += "/"
-					}
-					base += value
-					if parsed, err := url.Parse(base); err == nil {
-						u = parsed
-					}
-				}
-
-				if item == nil {
-					control = u
-				} else {
-					item.URL = u
 				}
 
 			case "rtpmap":
