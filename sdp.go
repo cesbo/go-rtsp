@@ -118,6 +118,11 @@ func ParseSDP(control *url.URL, data []byte) ([]*SdpItem, error) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		line = strings.TrimSpace(line)
+
+		if line == "" {
+			continue
+		}
 
 		switch line[0] {
 		case 'm':
