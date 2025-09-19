@@ -138,5 +138,6 @@ func (c *Client) SendRequest(request *Request) error {
 		return err
 	}
 
+	c.updateWriterDeadline()
 	return c.bw.Flush()
 }
