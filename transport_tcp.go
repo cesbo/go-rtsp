@@ -2,11 +2,13 @@ package rtsp
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 const (
@@ -15,15 +17,26 @@ const (
 )
 
 type TransportTCP struct {
-	reader    *bufio.Reader
 	onceError sync.Once
 	err       chan error
+
+	readTimeout time.Duration
+	conn        *net.Conn
+	ctx         context.Context
 }
 
-func NewTransportTCP(reader *bufio.Reader) *TransportTCP {
+func NewTransportTCP(ctx context.Context, conn *net.Conn, readTimeout time.Duration) *TransportTCP {
 	return &TransportTCP{
-		reader: reader,
-		err:    make(chan error, 1),
+		conn:        conn,
+		readTimeout: readTimeout,
+		ctx:         ctx,
+		err:         make(chan error, 1),
+	}
+}
+
+func (t *TransportTCP) updateReaderDeadline() {
+	if t.conn != nil && (*t.conn) != nil && t.readTimeout > 0 {
+		(*t.conn).SetReadDeadline(time.Now().Add(t.readTimeout))
 	}
 }
 
@@ -37,9 +50,21 @@ func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError fu
 		transportID int
 	)
 
+	go func() {
+		// wait for context cancel for stopping the loop
+		<-t.ctx.Done()
+		if t.conn != nil && (*t.conn) != nil {
+			(*t.conn).Close()
+			(*t.conn) = nil
+		}
+		fmt.Println("rtsp transport tcp: context done, exit loop")
+	}()
+
+	reader := bufio.NewReader(*t.conn)
 	for {
 		if size == 0 {
-			n, err := t.reader.Read(buf[skip:interleavedHeaderSize])
+			t.updateReaderDeadline()
+			n, err := reader.Read(buf[skip:interleavedHeaderSize])
 			if err != nil {
 				if errors.Is(err, net.ErrClosed) {
 					return
@@ -64,7 +89,8 @@ func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError fu
 			continue
 		}
 
-		n, err := t.reader.Read(buf[skip:size])
+		t.updateReaderDeadline()
+		n, err := reader.Read(buf[skip:size])
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return

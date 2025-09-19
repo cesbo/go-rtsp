@@ -58,6 +58,17 @@ func getSession(response *Response) string {
 	return ""
 }
 
+func (c *Client) updateReaderDeadline() {
+	if c.conn != nil && c.RequestTimeout > 0 {
+		c.conn.SetReadDeadline(time.Now().Add(c.RequestTimeout))
+	}
+}
+func (c *Client) updateWriterDeadline() {
+	if c.conn != nil && c.RequestTimeout > 0 {
+		c.conn.SetReadDeadline(time.Now().Add(c.RequestTimeout))
+	}
+}
+
 func (c *Client) do(ctx context.Context, request *Request) (response *Response, err error) {
 	cseq := c.cseq
 
@@ -74,21 +85,17 @@ func (c *Client) do(ctx context.Context, request *Request) (response *Response, 
 	}()
 
 	go func() {
-		// wait for context cancel or timeout
-		timeout := time.NewTimer(c.RequestTimeout)
-		defer timeout.Stop()
-
+		// wait for context cancel
 		select {
 		case <-done:
 			// func is finished. do nothing
 		case <-ctx.Done():
 			// context is canceled. close socket to break IO
 			done <- ctx.Err()
-			c.conn.Close()
-		case <-timeout.C:
-			// timeout. close socket to break IO
-			done <- ErrResponseTimeout
-			c.conn.Close()
+			if c.conn != nil {
+				c.conn.Close()
+				c.conn = nil
+			}
 		}
 	}()
 
@@ -97,11 +104,13 @@ func (c *Client) do(ctx context.Context, request *Request) (response *Response, 
 			return nil, err
 		}
 
+		c.updateReaderDeadline()
 		response, err = ReadResponse(c.br)
 		if err != nil {
 			return nil, err
 		}
 
+		c.updateReaderDeadline()
 		err = response.ReadBody(c.br)
 		if err != nil {
 			return nil, err
@@ -132,7 +141,6 @@ func (c *Client) do(ctx context.Context, request *Request) (response *Response, 
 // Start connectes to the RTSP server and get SDP
 func (c *Client) Start(ctx context.Context) error {
 	c.session = ""
-
 	var (
 		response *Response
 		err      error
@@ -159,7 +167,7 @@ func (c *Client) Start(ctx context.Context) error {
 	c.bw = bufio.NewWriter(c.conn)
 
 	if c.UseTCP {
-		c.transport = NewTransportTCP(c.br)
+		c.transport = NewTransportTCP(ctx, &c.conn, c.RequestTimeout)
 	} else {
 		c.transport = NewTransportUDP()
 	}

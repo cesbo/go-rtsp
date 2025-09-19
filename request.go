@@ -78,6 +78,7 @@ func (c *Client) SendRequest(request *Request) error {
 	request.URL.User = user
 
 	// Send the request
+	c.updateWriterDeadline()
 	_, err = fmt.Fprintf(c.bw, "%s %s RTSP/1.0\r\n", request.Method, uri)
 	if err != nil {
 		return err
@@ -85,6 +86,7 @@ func (c *Client) SendRequest(request *Request) error {
 
 	// User-Agent
 	if c.UserAgent != "" {
+		c.updateWriterDeadline()
 		_, err = fmt.Fprintf(c.bw, "User-Agent: %s\r\n", c.UserAgent)
 		if err != nil {
 			return err
@@ -93,6 +95,7 @@ func (c *Client) SendRequest(request *Request) error {
 
 	// CSeq
 	c.cseq += 1
+	c.updateWriterDeadline()
 	_, err = fmt.Fprintf(c.bw, "CSeq: %d\r\n", c.cseq)
 	if err != nil {
 		return err
@@ -100,6 +103,7 @@ func (c *Client) SendRequest(request *Request) error {
 
 	// Session
 	if c.session != "" {
+		c.updateWriterDeadline()
 		_, err = fmt.Fprintf(c.bw, "Session: %s\r\n", c.session)
 		if err != nil {
 			return err
@@ -108,6 +112,7 @@ func (c *Client) SendRequest(request *Request) error {
 
 	// Authorization
 	if c.auth != nil {
+		c.updateWriterDeadline()
 		_, err = fmt.Fprintf(
 			c.bw,
 			"Authorization: %s\r\n",
@@ -120,12 +125,14 @@ func (c *Client) SendRequest(request *Request) error {
 
 	// Header
 	if request.Header != nil {
+		c.updateWriterDeadline()
 		err = request.Header.Write(c.bw)
 		if err != nil {
 			return err
 		}
 	}
 
+	c.updateWriterDeadline()
 	_, err = fmt.Fprint(c.bw, "\r\n")
 	if err != nil {
 		return err
