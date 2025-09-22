@@ -1,7 +1,6 @@
 package rtsp
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,14 +34,20 @@ func parseResponseLine(line string) (proto, status string, code int, ok bool) {
 }
 
 // ReadResponse reads a response from the server.
-func ReadResponse(reader *bufio.Reader) (response *Response, err error) {
-	tp := textproto.NewReader(reader)
+func ReadResponse(conn *RtspConn) (response *Response, err error) {
+	if !conn.IsValid() {
+		return nil, ErrClientClosed
+	}
+
+	tp := textproto.NewReader(conn.br)
 
 	defer func() {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
 	}()
+
+	conn.updateReaderDeadline()
 
 	var line string
 	line, err = tp.ReadLine()
@@ -72,7 +77,10 @@ func ReadResponse(reader *bufio.Reader) (response *Response, err error) {
 }
 
 // ReadBody reads the body after response.
-func (r *Response) ReadBody(reader *bufio.Reader) error {
+func (r *Response) ReadBody(conn *RtspConn) error {
+	if !conn.IsValid() {
+		return ErrClientClosed
+	}
 	v := r.Header.Get("content-length")
 	if v == "" {
 		return nil
@@ -92,7 +100,9 @@ func (r *Response) ReadBody(reader *bufio.Reader) error {
 	}
 
 	r.Body = make([]byte, contentLength)
-	if _, err = io.ReadFull(reader, r.Body); err != nil {
+
+	conn.updateReaderDeadline()
+	if _, err = io.ReadFull(conn.br, r.Body); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}

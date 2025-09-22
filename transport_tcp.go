@@ -1,14 +1,12 @@
 package rtsp
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"sync"
-	"time"
 )
 
 const (
@@ -19,29 +17,25 @@ const (
 type TransportTCP struct {
 	onceError sync.Once
 	err       chan error
-
-	readTimeout time.Duration
-	conn        *net.Conn
-	ctx         context.Context
+	conn      *RtspConn
+	ctx       context.Context
 }
 
-func NewTransportTCP(ctx context.Context, conn *net.Conn, readTimeout time.Duration) *TransportTCP {
+func NewTransportTCP(ctx context.Context, conn *RtspConn) *TransportTCP {
 	return &TransportTCP{
-		conn:        conn,
-		readTimeout: readTimeout,
-		ctx:         ctx,
-		err:         make(chan error, 1),
-	}
-}
-
-func (t *TransportTCP) updateReaderDeadline() {
-	if t.conn != nil && (*t.conn) != nil && t.readTimeout > 0 {
-		(*t.conn).SetReadDeadline(time.Now().Add(t.readTimeout))
+		conn: conn,
+		ctx:  ctx,
+		err:  make(chan error, 1),
 	}
 }
 
 func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError func(error)) {
 	defer wg.Done()
+
+	if !t.conn.IsValid() {
+		onError(fmt.Errorf("no connection"))
+		return
+	}
 
 	buf := make([]byte, interleavedPacketSize)
 
@@ -53,18 +47,13 @@ func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError fu
 	go func() {
 		// wait for context cancel for stopping the loop
 		<-t.ctx.Done()
-		if t.conn != nil && (*t.conn) != nil {
-			(*t.conn).Close()
-			(*t.conn) = nil
-		}
-		fmt.Println("rtsp transport tcp: context done, exit loop")
+		t.conn.Close()
 	}()
 
-	reader := bufio.NewReader(*t.conn)
 	for {
 		if size == 0 {
-			t.updateReaderDeadline()
-			n, err := reader.Read(buf[skip:interleavedHeaderSize])
+			t.conn.updateReaderDeadline()
+			n, err := t.conn.br.Read(buf[skip:interleavedHeaderSize])
 			if err != nil {
 				if errors.Is(err, net.ErrClosed) {
 					return
@@ -89,8 +78,8 @@ func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError fu
 			continue
 		}
 
-		t.updateReaderDeadline()
-		n, err := reader.Read(buf[skip:size])
+		t.conn.updateReaderDeadline()
+		n, err := t.conn.br.Read(buf[skip:size])
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return

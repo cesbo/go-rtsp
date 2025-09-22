@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,57 @@ var (
 	ErrResponseTimeout = fmt.Errorf("response timeout")
 )
 
+type RtspConn struct {
+	net.Conn
+	br      *bufio.Reader
+	bw      *bufio.Writer
+	timeout time.Duration
+	lock    sync.RWMutex
+}
+
+func NewRtspConn(conn net.Conn, timeout time.Duration) *RtspConn {
+	return &RtspConn{
+		Conn:    conn,
+		br:      bufio.NewReader(conn),
+		bw:      bufio.NewWriter(conn),
+		timeout: timeout,
+	}
+}
+
+func (rc *RtspConn) Close() {
+	if rc == nil {
+		return
+	}
+
+	rc.lock.Lock()
+	defer rc.lock.Unlock()
+
+	if rc.Conn != nil {
+		rc.Conn.Close()
+		rc.Conn = nil
+	}
+}
+func (rc *RtspConn) IsValid() bool {
+	if rc == nil {
+		return false
+	}
+
+	rc.lock.RLock()
+	defer rc.lock.RUnlock()
+
+	return rc.Conn != nil
+}
+func (rc *RtspConn) updateReaderDeadline() {
+	if rc.IsValid() && rc.timeout > 0 {
+		rc.SetReadDeadline(time.Now().Add(rc.timeout))
+	}
+}
+func (rc *RtspConn) updateWriterDeadline() {
+	if rc.IsValid() && rc.timeout > 0 {
+		rc.SetWriteDeadline(time.Now().Add(rc.timeout))
+	}
+}
+
 // Real Time Streaming Protocol (RTSP)
 // https://datatracker.ietf.org/doc/html/rfc2326
 type Client struct {
@@ -35,9 +87,7 @@ type Client struct {
 	ConnectTimeout time.Duration
 	RequestTimeout time.Duration
 
-	conn net.Conn
-	br   *bufio.Reader
-	bw   *bufio.Writer
+	conn *RtspConn
 
 	cseq    int
 	session string
@@ -56,17 +106,6 @@ func getSession(response *Response) string {
 	}
 
 	return ""
-}
-
-func (c *Client) updateReaderDeadline() {
-	if c.conn != nil && c.RequestTimeout > 0 {
-		c.conn.SetReadDeadline(time.Now().Add(c.RequestTimeout))
-	}
-}
-func (c *Client) updateWriterDeadline() {
-	if c.conn != nil && c.RequestTimeout > 0 {
-		c.conn.SetReadDeadline(time.Now().Add(c.RequestTimeout))
-	}
 }
 
 func (c *Client) do(ctx context.Context, request *Request) (response *Response, err error) {
@@ -92,10 +131,7 @@ func (c *Client) do(ctx context.Context, request *Request) (response *Response, 
 		case <-ctx.Done():
 			// context is canceled. close socket to break IO
 			done <- ctx.Err()
-			if c.conn != nil {
-				c.conn.Close()
-				c.conn = nil
-			}
+			c.conn.Close()
 		}
 	}()
 
@@ -104,14 +140,12 @@ func (c *Client) do(ctx context.Context, request *Request) (response *Response, 
 			return nil, err
 		}
 
-		c.updateReaderDeadline()
-		response, err = ReadResponse(c.br)
+		response, err = ReadResponse(c.conn)
 		if err != nil {
 			return nil, err
 		}
 
-		c.updateReaderDeadline()
-		err = response.ReadBody(c.br)
+		err = response.ReadBody(c.conn)
 		if err != nil {
 			return nil, err
 		}
@@ -158,16 +192,15 @@ func (c *Client) Start(ctx context.Context) error {
 		Timeout: c.ConnectTimeout,
 	}
 
-	c.conn, err = dialer.DialContext(ctx, "tcp", c.URL.Host)
+	conn, err := dialer.DialContext(ctx, "tcp", c.URL.Host)
 	if err != nil {
 		return err
 	}
 
-	c.br = bufio.NewReader(c.conn)
-	c.bw = bufio.NewWriter(c.conn)
+	c.conn = NewRtspConn(conn, c.RequestTimeout)
 
 	if c.UseTCP {
-		c.transport = NewTransportTCP(ctx, &c.conn, c.RequestTimeout)
+		c.transport = NewTransportTCP(ctx, c.conn)
 	} else {
 		c.transport = NewTransportUDP()
 	}
@@ -216,7 +249,7 @@ func (c *Client) GetSDP() []*SdpItem {
 
 // Setup sends request to setup the stream delivery
 func (c *Client) Setup(ctx context.Context, mediaID int, control *url.URL) error {
-	if c.conn == nil {
+	if !c.conn.IsValid() {
 		return ErrClientClosed
 	}
 
@@ -249,7 +282,7 @@ func (c *Client) Setup(ctx context.Context, mediaID int, control *url.URL) error
 // Waits for ctx.Done or any error on transport.
 // For UDP transport it sends keep-alive requests each 30 second
 func (c *Client) Play(ctx context.Context, handler MediaHandler) error {
-	if c.conn == nil {
+	if !c.conn.IsValid() {
 		return ErrClientClosed
 	}
 
@@ -298,7 +331,7 @@ func (c *Client) Play(ctx context.Context, handler MediaHandler) error {
 
 // Ping sends request to keep the connection alive
 func (c *Client) Ping(ctx context.Context) error {
-	if c.conn == nil {
+	if !c.conn.IsValid() {
 		return ErrClientClosed
 	}
 
@@ -313,7 +346,7 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Teardown sends request to stop the stream delivery
 func (c *Client) Teardown(ctx context.Context) error {
-	if c.conn == nil {
+	if !c.conn.IsValid() {
 		return ErrClientClosed
 	}
 
@@ -333,9 +366,5 @@ func (c *Client) Close() {
 		c.transport.Close()
 		c.transport = nil
 	}
-
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn = nil
-	}
+	c.conn.Close()
 }
