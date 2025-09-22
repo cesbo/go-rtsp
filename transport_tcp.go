@@ -1,7 +1,7 @@
 package rtsp
 
 import (
-	"bufio"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,20 +15,27 @@ const (
 )
 
 type TransportTCP struct {
-	reader    *bufio.Reader
 	onceError sync.Once
 	err       chan error
+	conn      *RtspConn
+	ctx       context.Context
 }
 
-func NewTransportTCP(reader *bufio.Reader) *TransportTCP {
+func NewTransportTCP(ctx context.Context, conn *RtspConn) *TransportTCP {
 	return &TransportTCP{
-		reader: reader,
-		err:    make(chan error, 1),
+		conn: conn,
+		ctx:  ctx,
+		err:  make(chan error, 1),
 	}
 }
 
 func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError func(error)) {
 	defer wg.Done()
+
+	if !t.conn.IsValid() {
+		onError(fmt.Errorf("no connection"))
+		return
+	}
 
 	buf := make([]byte, interleavedPacketSize)
 
@@ -37,9 +44,16 @@ func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError fu
 		transportID int
 	)
 
+	go func() {
+		// wait for context cancel for stopping the loop
+		<-t.ctx.Done()
+		t.conn.Close()
+	}()
+
 	for {
 		if size == 0 {
-			n, err := t.reader.Read(buf[skip:interleavedHeaderSize])
+			t.conn.updateReaderDeadline()
+			n, err := t.conn.br.Read(buf[skip:interleavedHeaderSize])
 			if err != nil {
 				if errors.Is(err, net.ErrClosed) {
 					return
@@ -64,7 +78,8 @@ func (t *TransportTCP) loop(wg *sync.WaitGroup, handler MediaHandler, onError fu
 			continue
 		}
 
-		n, err := t.reader.Read(buf[skip:size])
+		t.conn.updateReaderDeadline()
+		n, err := t.conn.br.Read(buf[skip:size])
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return
